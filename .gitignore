@@ -1,0 +1,19 @@
+# Gradle
+.gradle/
+build/
+
+# Claude / planning scratch
+.claude/
+
+# IntelliJ
+.idea/
+*.iml
+
+# Built jar, rebuilt by every build.
+/jars/
+
+# Staging folder and release archive, made by `gradlew releaseZip`.
+# Root-anchored: an unanchored rule would also hide src/eventloggerrenewed/ on case-insensitive Windows.
+/EventLoggerRenewed/
+/EventLoggerRenewed.zip
+/EventLoggerRenewed-*.zip

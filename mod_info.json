@@ -1,0 +1,13 @@
+{
+  "id": "event_logger_renewed",
+  "name": "Event Logger - Renewed",
+  "author": "Oddisz",
+  "utility": "true",
+  "version": "1.0.0",
+  "description": "Keeps every fleet log message (the messages at the bottom left of the campaign screen) on an Events tab of the Intel screen, newest first, with a search box. The log is saved with the campaign.",
+  "gameVersion": "0.98.5a-RC6",
+  "jars": ["jars/EventLoggerRenewed.jar"],
+  "modPlugin": "eventloggerrenewed.EventLoggerModPlugin",
+  "updateCheckURL": "https://raw.githubusercontent.com/andrzejsokolowski/starsector-event-logger-renewed/main/event_logger_renewed.version",
+  "dependencies": []
+}

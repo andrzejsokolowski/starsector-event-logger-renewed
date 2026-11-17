@@ -1,0 +1,5 @@
+Version 1.0.0 (2026-11-17)
+- First release. Every fleet log message (the messages at the bottom left of the campaign screen) is kept on a new Events tab of the Intel screen, newest first, with its icon, date and full text.
+- Search box, a count, and a Clear button (click twice).
+- Show opens a message's entry on the Intel screen while that entry is still there.
+- The log is saved with the campaign and keeps the newest 2000 messages.

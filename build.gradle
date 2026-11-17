@@ -1,0 +1,170 @@
+plugins {
+    id 'java'
+}
+
+java {
+    sourceCompatibility = JavaVersion.VERSION_17
+    targetCompatibility = JavaVersion.VERSION_17
+}
+
+tasks.withType(JavaCompile).configureEach {
+    options.encoding = 'UTF-8'
+}
+
+sourceSets {
+    main {
+        java.srcDirs = ['src']
+    }
+    // Headless checks. Never shipped.
+    selftest {
+        java.srcDirs = ['test/src']
+    }
+}
+
+repositories {
+    mavenCentral()
+}
+
+// Starsector core (obfuscated game classes + bundled libs: lwjgl, json, log4j, ...)
+def gameJars = fileTree(dir: "${starsectorPath}/starsector-core", include: '*.jar')
+
+dependencies {
+    compileOnly gameJars
+    selftestImplementation gameJars
+    selftestImplementation files(sourceSets.main.output)
+}
+
+jar {
+    destinationDirectory = file('jars')
+    archiveFileName = 'EventLoggerRenewed.jar'
+}
+
+// Game classes this mod may name. Everything else of the game's own UI gets new scrambled names with
+// every hotfix, so it is reached by method name only (see Reflect.java).
+def allowedGameClasses = [
+        'com/fs/starfarer/campaign/CampaignEngine',
+        'com/fs/starfarer/campaign/CampaignUIPersistentData',
+        'com/fs/starfarer/campaign/comms/IntelTabData',
+]
+
+// Starsector's classloader refuses java.io, java.nio.file and java.lang.reflect to mod code, and the
+// refusal happens at class-resolution time. Catch it at build time by scanning every compiled class.
+tasks.register('checkNoForbiddenApis') {
+    dependsOn tasks.named('classes')
+    outputs.upToDateWhen { false }
+    doLast {
+        def forbidden = ['java/io/', 'java/nio/file/', 'java/lang/reflect/']
+        def offenders = []
+        sourceSets.main.output.classesDirs.each { dir ->
+            fileTree(dir: dir, include: '**/*.class').each { f ->
+                def text = new String(f.bytes, 'ISO-8859-1')
+                forbidden.each { needle ->
+                    if (text.contains(needle)) offenders << "${f.name} references ${needle}"
+                }
+                (text =~ /com\/fs\/starfarer\/[A-Za-z0-9_\/]+/).each { ref ->
+                    if (!ref.startsWith('com/fs/starfarer/api/') && !allowedGameClasses.contains(ref))
+                        offenders << "${f.name} names game class ${ref}"
+                }
+            }
+        }
+        if (!offenders.isEmpty()) {
+            throw new GradleException("Not allowed in mod code:\n  " + offenders.unique().join('\n  '))
+        }
+    }
+}
+
+tasks.named('jar') { dependsOn tasks.named('checkNoForbiddenApis') }
+
+/** Saved log entries survive the round trip. */
+tasks.register('checkLog', JavaExec) {
+    dependsOn tasks.named('selftestClasses')
+    classpath = sourceSets.selftest.runtimeClasspath
+    mainClass = 'eventloggerrenewed.LogCheck'
+    executable = "${starsectorPath}/jre/bin/java.exe"
+}
+
+/** mod_info.json, the .version file and the Version Checker registration must agree. */
+tasks.register('checkVersionMetadata') {
+    doLast {
+        def infoFile = file('mod_info.json')
+        def versionFile = file('event_logger_renewed.version')
+        def registrationFile = file('data/config/version/version_files.csv')
+        def parser = new groovy.json.JsonSlurper()
+        def info = parser.parse(infoFile, 'UTF-8')
+        def remote = parser.parse(versionFile, 'UTF-8')
+        def parts = ['major', 'minor', 'patch'].collect { remote.modVersion?.get(it)?.toString() }
+        if (parts.any { it == null || !(it ==~ /\d+/) } || info.version != parts.join('.'))
+            throw new GradleException('mod_info.json and event_logger_renewed.version must have the same numeric version')
+        def repo = 'andrzejsokolowski/starsector-event-logger-renewed'
+        def masterUrl = "https://raw.githubusercontent.com/${repo}/main/event_logger_renewed.version"
+        if (info.id != 'event_logger_renewed' || info.name != remote.modName)
+            throw new GradleException('Update metadata must identify Event Logger - Renewed')
+        if (info.updateCheckURL != masterUrl || remote.masterVersionFile != masterUrl)
+            throw new GradleException('Both update URLs must point to the published version file')
+        if (remote.directDownloadURL != "https://github.com/${repo}/releases/latest/download/EventLoggerRenewed.zip")
+            throw new GradleException('The update download must point to the EventLoggerRenewed.zip release asset')
+        if (remote.changelogURL != "https://raw.githubusercontent.com/${repo}/main/changelog.txt")
+            throw new GradleException('changelogURL must point to changelog.txt on main')
+        if (info.modThreadId?.toString() != remote.modThreadId?.toString())
+            throw new GradleException('mod_info.json and the .version file must name the same forum topic')
+        if (info.gameVersion != remote.starsectorVersion)
+            throw new GradleException('The supported Starsector versions do not match')
+        if (registrationFile.readLines('UTF-8').findAll { !it.trim().isEmpty() } != ['version file', 'event_logger_renewed.version'])
+            throw new GradleException('Version Checker must register event_logger_renewed.version')
+        if (!file('changelog.txt').getText('UTF-8').startsWith("Version ${info.version} ("))
+            throw new GradleException("changelog.txt must start with Version ${info.version}")
+        logger.lifecycle("Update metadata verified for Event Logger - Renewed ${info.version}")
+    }
+}
+
+/** The files that ship: no UTF-8 BOM (it breaks every Starsector JSON and CSV), every art path exists. */
+tasks.register('checkReleaseFiles') {
+    doLast {
+        def problems = []
+        fileTree(projectDir) { include 'mod_info.json', '*.version', 'data/**/*.json', 'data/**/*.csv' }.each { f ->
+            def bytes = f.bytes
+            if (bytes.length >= 3 && (bytes[0] & 0xFF) == 0xEF && (bytes[1] & 0xFF) == 0xBB && (bytes[2] & 0xFF) == 0xBF)
+                problems << "UTF-8 BOM in ${projectDir.toPath().relativize(f.toPath())}"
+        }
+        def core = file("${starsectorPath}/starsector-core")
+        def artRef = ~/graphics\/[A-Za-z0-9_\-\/. ]+?\.(png|jpg|webp)/
+        fileTree(projectDir) { include 'data/**', 'src/**/*.java' }.each { f ->
+            (f.getText('UTF-8') =~ artRef).each { match ->
+                def path = match[0]
+                if (!file(path).isFile() && !new File(core, path).isFile())
+                    problems << "${projectDir.toPath().relativize(f.toPath())} names missing art ${path}"
+            }
+        }
+        if (!file('icon.png').isFile()) problems << 'icon.png is missing'
+        if (problems) throw new GradleException("Release files are not ready:\n  " + problems.join('\n  '))
+        logger.lifecycle('Release files verified')
+    }
+}
+
+tasks.named('check') {
+    dependsOn tasks.named('checkNoForbiddenApis'), tasks.named('checkLog'),
+            tasks.named('checkVersionMetadata'), tasks.named('checkReleaseFiles')
+}
+
+// Only what the game loads.
+def releaseFiles = copySpec {
+    from(projectDir) {
+        include 'mod_info.json', 'event_logger_renewed.version', 'icon.png', 'LICENSE'
+        include 'data/**', 'jars/EventLoggerRenewed.jar'
+    }
+}
+
+// Sync, not Copy: files that no longer ship must not linger in the staging folder.
+tasks.register('stageRelease', Sync) {
+    dependsOn tasks.named('jar')
+    with releaseFiles
+    into layout.projectDirectory.dir('EventLoggerRenewed')
+}
+
+// Package directly from the source files so stale staging contents cannot enter a release.
+tasks.register('releaseZip', Zip) {
+    dependsOn tasks.named('stageRelease'), tasks.named('check')
+    destinationDirectory = layout.projectDirectory
+    archiveFileName = 'EventLoggerRenewed.zip'
+    into('EventLoggerRenewed') { with releaseFiles }
+}
